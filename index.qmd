@@ -1,6 +1,6 @@
 ---
-title: "Teaching a Model to Recognise the Legal Area of Swedish Legal Documents"
-description: "What thousands of Swedish legal documents, 18 main legal areas and 157 sub-areas taught me about labels, language, noise, and the difference between **What a document is about** versus **Which legal area a document belongs to**."
+title: "Training a model to recognise the legal area of Swedish legal documents"
+description: "What thousands of Swedish legal documents, 18 main legal areas and 157 sub-areas taught me about labels, language processing, noise, and the difference between **What a document is about** versus **Which legal area a document belongs to**."
 author: "Mahraan Talukder"
 date: 01 September 2026
 date-format: "DD MMMM, YYYY"
@@ -29,7 +29,7 @@ It contains analysed court rulings, legal news, and expert commentaries, with do
 
 Then there is **Noxtua**, a European Legal AI platform built for legal research, analysis, and document drafting, with a strong focus on European data protection and regulatory requirements. [Read more](https://www.noxtua.com)
 
-The **Blendow-Noxtua** collaboration brings these two worlds together, where **Blendow** provides the legal data and expertise, while **Noxtua** provides the AI technology to turn that data into something layers can work with and usable for modern legal workflows. [Read more](https://www.blendow.se/blendow-noxtua)
+The **Blendow-Noxtua** collaboration brings these two worlds together, where **Blendow** provides the legal data and expertise, while **Noxtua** provides the AI technology to turn that data into something lawyers can work with and usable for modern legal workflows. [Read more](https://www.blendow.se/blendow-noxtua)
 
 ## The Problem
 
@@ -54,39 +54,42 @@ This existing data provided an opportunity to build a dedicated, lightweight AI 
 This became the focus of my research and implementation of developing a faster and more scalable legal-area tagging classifier using the already tagged Lexnova data as its training foundation.
 
 However, the problem was far from being a straightforward text-classification task.
+What follows are a walk through the data, realising the dead ends, cleaning the text accordingly,
+exploring combination of features, for building the small model that eventually made it into production.
 
 ## The challenges
 
-**1. Documents can belong to multiple legal areas.**
+**1. The full 157-category problem was too ambitious as a starting point.**
 
-A document is not necessarily about one area of law.
-On average, a Lexnova document carries 2.6 main legal-area tags,
-making this a multi-label classification problem rather than a conventional single-class problem.
+Rather than immediately attempting to distinguish between all 157 sub-areas, I decided to first focus on the 18 main legal areas.
+This provided a manageable first milestone of just building a reliable classifier for the broad areas of law, understand where the data and modelling challenges lie, and use those findings as a foundation for potentially tackling the much finer-grained sub-areas later.
 
-**2. The legal-area hierarchy is highly uneven.**
+**2. Legal documents contain a lot of irrelevant text.**
+
+A legal document can contain headers, footers, addresses, case numbers, procedural boilerplate, repeated court terminology, and other information that says little about its actual legal area.
+A classifier that simply consumes the entire raw document could therefore spend much of its capacity learning patterns that have little to do with the classification task itself.
+
+**3. The legal-area hierarchy is highly uneven.**
 
 The taxonomy contains 18 main legal areas and 157 sub-areas, but the data is far from evenly distributed.
 Public Law, for example, contains significantly more documents than many other areas.
 Because documents can have multiple tags, reducing the number of Public Law documents would also remove
 training examples from other areas.
 
-**3. The existing tags are not always clean ground truth.**
+**4. Documents can belong to multiple legal areas.**
+
+A document is not necessarily about one area of law.
+On average, a Lexnova document carries 2.6 main legal-area tags,
+making this a multi-label classification problem rather than a conventional single-class problem.
+
+**5. The existing tags are not always clean ground truth.**
 
 The historical legal-area tags were assigned to the documents by legal professionals, but they were not necessarily intended to represent a strict classification of what a document was truly about.
 Some documents were deliberately assigned to several broad legal areas so that they could reach a wider range of subscribers of Lexnova.
-As a result, the existing tags, each of them contain useful information but also could contain some falsely assigned legal documents.
+As a result, the existing tags each contain useful information, but they can also contain deliberately broad or loosely assigned labels.
+This matters later, because it means the model's job is not to perfectly imitate the historical tags assigned by the legal professionals, but to learn the underlying legal-area signal the documents contain.
 
-**4. Legal documents contain a lot of irrelevant text.**
-
-A legal document can contain headers, footers, addresses, case numbers, procedural boilerplate, repeated court terminology, and other information that says little about its actual legal area.
-A classifier that simply consumes the entire raw document could therefore spend much of its capacity learning patterns that have little to do with the classification task itself.
-
-**5. The full 157-category problem was too ambitious as a starting point.**
-
-Rather than immediately attempting to distinguish between all 157 sub-areas, I decided to first focus on the 18 main legal areas.
-This provided a manageable first milestone of just building a reliable classifier for the broad areas of law, understand where the data and modelling challenges lie, and use those findings as a foundation for potentially tackling the much finer-grained sub-areas later.
-
-## The Legal Area Hierarchy
+## The Legal Area Hierarchy (challenge 1)
 
 The tags form a two-level tree: 18 broad main areas and 157 more specific sub-areas underneath them. A single document can touch several branches at once. So the model had to be able to assign one or multiple main areas to the same document.
 
@@ -136,7 +139,7 @@ That distinction became one of the most important lessons of the project.
 
 So I moved from unsupervised topic modelling to a supervised multi-label classifier trained directly on the 18 main legal areas.
 
-## Cleaning the Text
+## Cleaning the Text (challenge 2)
 
 Before the model could learn anything useful, the documents had to be cleaned. Legal documents contain a lot of material that describes the document itself rather than its legal subject, like XML tags, page numbers, addresses, phone numbers, case references, repeated sentences, personal names and procedural boilerplate.
 
@@ -176,8 +179,8 @@ Here are the top terms the model found most useful for each legal area:
 **2. Patterns inside Swedish words**
 
 Swedish creates long compound words.
-A useful way to deal with this is to look at character sequences or technically called character n-grams.
-Rather than treating every word as an indivisible unit. Short character sequences can reveal relationships between words
+A useful way to deal with this is to look at character sequences, or technically, character n-grams.
+Rather than treating every word as an indivisible unit, short character sequences can reveal relationships between words
 even when the exact full word has never appeared in the training data.
 
 ![Top compound / character patterns (Swedish)](/images/img_char.png)
@@ -195,15 +198,45 @@ The three representations are combined and passed to the classifier.
 
 ![How the three views are combined](/images/img_dim_fusion.png)
 
-## The Classifier and How Well It Works
+## Dealing with the imbalance (challenge 3)
+
+Some legal areas have a lot of documents, while others have only a few. Public Law, for example, has far more documents than most of the others.
+
+The easy fix would have been to throw away some Public Law documents, or to collect more samples for the smaller areas until they matched.
+However, neither approach was practical. Throwing away Public Law documents would also remove training examples from other areas, since one document can belong to several areas at once.
+Similarly, adding more samples for the smaller areas could also introduce more Public Law documents.
+Because of this overlap, simply dropping or adding samples for specific tags could not properly solve the imbalance.
+
+Instead, I did three simple things:
+
+1. I let every legal area pick its own important words.
+Using Chi-squared (Chi²) statistics, I selected important single and compound terms separately for each of the 18 tag classes,
+using the three views mentioned above. A word like patent matters a lot for Intellectual Property but almost nothing for Family Law.
+So instead of picking the most important words once for the whole dataset, I let each area pick its own top words.
+This prevents the larger areas from drowning out the smaller ones.
+
+2. I told the model to pay a bit more attention to the rare areas.
+During training, mistakes on rare areas are counted as slightly more costly than mistakes on common ones, so the model does not simply learn to favour the larger areas.
+I also put a limit on this, so the smallest areas do not take over completely.
+
+3. I gave every legal area its own decision rule. By default, a model says "yes" when it is more than 50% sure.
+But a 50% rule is not necessarily suitable for every area. So I tuned the cut-off separately for each of the 18 areas using the validation data.
+Rare areas ended up with a lower bar, while common areas had a higher one.
+
+This is not the same as making the imbalance disappear.
+But it meant the model stayed usable across all 18 areas,
+instead of quietly collapsing towards the largest tag class.
+
+## The Classifier and How Well It Works (challenge 4)
 
 The final classifier is a small neural network called a **Multilayer Perceptron (MLP)**.
 
 It receives the combined features from the three representations above and produces 18 scores, one for each main legal area.
 
-It does not force a document into a single category. Rather answers in terms of scores that how likely is this document to belong to each of the 18 legal areas?
+It does not force a document into a single category. Rather, it answers with 18 scores that how likely is this document to belong to each of the 18 legal areas?
 
 A decision threshold then converts those scores into the final set of predicted labels.
+In simple words, the model is allowed to say "this document touches both Tax Law and Administrative Law" rather than forcing a single winner.
 
 Because this is a multi-label problem, a single accuracy number does not tell the whole story.
 Looking at performance per legal area gives a much clearer picture.
@@ -213,6 +246,30 @@ Looking at performance per legal area gives a much clearer picture.
 The confusion matrix below shows, for each true legal area, how often the model also predicted other areas. The diagonal (darker green) is the recall for that area.
 
 ![Multi-label confusion matrix](/images/img_cm.png)
+
+## Noisy labels, and why the model does not need to match them (challenge 5)
+
+Earlier I mentioned that the historical tags were not always clean ground truth.
+Some documents were deliberately given broad labels so they could reach a wider group of subscribers,
+and the tags were made for editorial purposes rather than for training a machine-learning model.
+
+This has an important consequence that is worth making explicit.
+
+The model does not have to reproduce every historical tag to be useful.
+If the model predicts a legal area that a lawyer did not assign, that is not automatically an error.
+It may simply mean the model recognised a legal area that is genuinely present in the document,
+but that the original tagger chose not to include, or did not consider important at the time.
+
+In other words, "correct" here does not mean "identical to the historical label".
+It means "something a legal professional would recognise as a valid legal area for this document".
+The goal of the model is to learn the underlying legal-area signal the documents contain,
+not to imitate the imperfections of the labels it was trained on.
+
+Practically, this means I look at the model's output in two ways.
+Some disagreement with the historical labels is expected and healthy,
+and evaluating the model purely by how often it matches those labels would understate how well it actually works.
+At the same time, the labels are still the best signal we have for training, so the model is not free to invent new legal areas either.
+It is somewhere in between "Guided by the historical labels from Lexnova, but not chained to them".
 
 ## Focusing on the 18 Main Areas
 
@@ -246,7 +303,7 @@ This is not only a demo. It is also a way to challenge the model and collect bet
 Once the model was trained, the important parts of the pipeline (the vocabulary, the feature settings, and the model weights) were saved into a single artefact.
 A new document can now be cleaned, turned into the same three representations, passed through the model, and returned with predicted legal areas, all without needing the original thousands of training documents.
 
-That changed the project from an experiment of a model in a jupyter notebook into a component that can actually be plugged into another system like our pipeline for **Blendow-Noxtua**.
+That changed the project from a model experiment in a Jupyter notebook into a component that can actually be plugged into another system, like our pipeline for Blendow-Noxtua.
 
 ## What I Learned
 
